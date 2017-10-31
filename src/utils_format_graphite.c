@@ -97,6 +97,86 @@ static void gr_copy_escape_part(char *dst, const char *src, size_t dst_len,
   }
 }
 
+static int gr_format_name_tagged(char *ret, int ret_len, value_list_t const *vl,
+                                 char const *ds_name, char const *prefix,
+                                 char const *postfix, char const escape_char,
+                                 unsigned int flags) {
+  char n_host[DATA_MAX_NAME_LEN];
+  char n_plugin[DATA_MAX_NAME_LEN];
+  char n_plugin_instance[DATA_MAX_NAME_LEN];
+  char n_type[DATA_MAX_NAME_LEN];
+  char n_type_instance[DATA_MAX_NAME_LEN];
+
+  char tmp_plugin[2 * DATA_MAX_NAME_LEN + 24];
+  char tmp_type[2 * DATA_MAX_NAME_LEN + 20];
+  char tmp_metric[3 * DATA_MAX_NAME_LEN + 2];
+
+  if (prefix == NULL)
+    prefix = "";
+
+  if (postfix == NULL)
+    postfix = "";
+
+  gr_copy_escape_part(n_host, vl->host, sizeof(n_host), escape_char, 1);
+  gr_copy_escape_part(n_plugin, vl->plugin, sizeof(n_plugin), escape_char, 1);
+  gr_copy_escape_part(n_plugin_instance, vl->plugin_instance,
+                      sizeof(n_plugin_instance), escape_char, 1);
+  gr_copy_escape_part(n_type, vl->type, sizeof(n_type), escape_char, 1);
+  gr_copy_escape_part(n_type_instance, vl->type_instance,
+                      sizeof(n_type_instance), escape_char, 1);
+
+  if (n_plugin_instance[0] != '\0')
+    snprintf(tmp_plugin, sizeof(tmp_plugin),
+             "plugin=%s;plugin_instance=%s",
+             n_plugin, n_plugin_instance);
+  else
+    snprintf(tmp_plugin, sizeof(tmp_plugin), "plugin=%s", n_plugin);
+
+  if (n_type_instance[0] != '\0') {
+    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) && strcmp(n_plugin, n_type) == 0)
+      snprintf(tmp_type, sizeof(tmp_type), "type_instance=%s", n_type_instance);
+    else
+      snprintf(tmp_type, sizeof(tmp_type),
+               "type=%s;type_instance=%s",
+               n_type, n_type_instance);
+  } else
+    snprintf(tmp_type, sizeof(tmp_type), "type=%s", n_type);
+
+  /* Assert always_append_ds -> ds_name */
+  assert(!(flags & GRAPHITE_ALWAYS_APPEND_DS) || (ds_name != NULL));
+  if (ds_name != NULL) {
+    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) && strcmp(n_plugin, n_type) == 0)
+      snprintf(tmp_metric, sizeof(tmp_metric), "%s.%s", n_plugin, ds_name);
+    else
+      snprintf(tmp_metric, sizeof(tmp_metric), "%s.%s.%s", n_plugin, n_type, ds_name);
+
+    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) &&
+        strcmp(n_plugin, n_type) == 0 &&
+        strcmp(n_plugin_instance, n_type_instance) == 0)
+      snprintf(ret, ret_len, "%s%s%s;host=%s;%s;ds_name=%s", prefix, tmp_metric, postfix,
+               n_host, tmp_plugin, ds_name);
+    else
+      snprintf(ret, ret_len, "%s%s%s;host=%s;%s;%s;ds_name=%s", prefix, tmp_metric, postfix,
+               n_host, tmp_plugin, tmp_type, ds_name);
+  } else {
+    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) && strcmp(n_plugin, n_type) == 0)
+      snprintf(tmp_metric, sizeof(tmp_metric), "%s", n_plugin);
+    else
+      snprintf(tmp_metric, sizeof(tmp_metric), "%s.%s", n_plugin, n_type);
+
+    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) &&
+        strcmp(n_plugin, n_type) == 0 &&
+        strcmp(n_plugin_instance, n_type_instance) == 0)
+      snprintf(ret, ret_len, "%s%s%s;host=%s;%s", prefix, tmp_metric, postfix, n_host,
+               tmp_plugin);
+    else
+      snprintf(ret, ret_len, "%s%s%s;host=%s;%s;%s", prefix, tmp_metric, postfix, n_host,
+               tmp_plugin, tmp_type);
+  }
+
+  return 0;
+}
+
 static int gr_format_name(char *ret, int ret_len, value_list_t const *vl,
                           char const *ds_name, char const *prefix,
                           char const *postfix, char const escape_char,
@@ -199,15 +279,26 @@ int format_graphite(char *buffer, size_t buffer_size, data_set_t const *ds,
       ds_name = ds->ds[i].name;
 
     /* Copy the identifier to `key' and escape it. */
-    status = gr_format_name(key, sizeof(key), vl, ds_name, prefix, postfix,
-                            escape_char, flags);
-    if (status != 0) {
-      ERROR("format_graphite: error with gr_format_name");
-      sfree(rates);
-      return status;
+    if (flags & GRAPHITE_USE_TAGS) {
+      status = gr_format_name_tagged(key, sizeof(key), vl, ds_name, prefix,
+                                     postfix, escape_char, flags);
+      if (status != 0) {
+        ERROR("format_graphite: error with gr_format_name_tagged");
+        sfree(rates);
+        return status;
+      }
+    } else {
+      status = gr_format_name(key, sizeof(key), vl, ds_name, prefix, postfix,
+                              escape_char, flags);
+      if (status != 0) {
+        ERROR("format_graphite: error with gr_format_name");
+        sfree(rates);
+        return status;
+      }
+
+      escape_graphite_string(key, escape_char);
     }
 
-    escape_graphite_string(key, escape_char);
     /* Convert the values to an ASCII representation and put that into
      * `values'. */
     status = gr_format_values(values, sizeof(values), i, ds, vl, rates);
