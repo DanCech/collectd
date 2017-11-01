@@ -107,9 +107,12 @@ static int gr_format_name_tagged(char *ret, int ret_len, value_list_t const *vl,
   char n_type[DATA_MAX_NAME_LEN];
   char n_type_instance[DATA_MAX_NAME_LEN];
 
-  char tmp_plugin[2 * DATA_MAX_NAME_LEN + 24];
-  char tmp_type[2 * DATA_MAX_NAME_LEN + 20];
+  char tmp_plugin[DATA_MAX_NAME_LEN + 8];
+  char tmp_plugin_instance[DATA_MAX_NAME_LEN + 17];
+  char tmp_type[DATA_MAX_NAME_LEN + 6];
+  char tmp_type_instance[DATA_MAX_NAME_LEN + 15];
   char tmp_metric[3 * DATA_MAX_NAME_LEN + 2];
+  char tmp_ds_name[DATA_MAX_NAME_LEN + 9];
 
   if (prefix == NULL)
     prefix = "";
@@ -125,54 +128,48 @@ static int gr_format_name_tagged(char *ret, int ret_len, value_list_t const *vl,
   gr_copy_escape_part(n_type_instance, vl->type_instance,
                       sizeof(n_type_instance), escape_char, 1);
 
+  snprintf(tmp_plugin, sizeof(tmp_plugin), ";plugin=%s", n_plugin);
+
   if (n_plugin_instance[0] != '\0')
-    snprintf(tmp_plugin, sizeof(tmp_plugin),
-             "plugin=%s;plugin_instance=%s",
-             n_plugin, n_plugin_instance);
+    snprintf(tmp_plugin_instance, sizeof(tmp_plugin_instance),
+             ";plugin_instance=%s",  n_plugin_instance);
   else
-    snprintf(tmp_plugin, sizeof(tmp_plugin), "plugin=%s", n_plugin);
+    tmp_plugin_instance[0] = '\0';
+
+  if (!(flags & GRAPHITE_DROP_DUPE_FIELDS) || strcmp(n_plugin, n_type) != 0)
+    snprintf(tmp_type, sizeof(tmp_type), ";type=%s", n_type);
+  else
+    tmp_type[0] = '\0';
 
   if (n_type_instance[0] != '\0') {
-    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) && strcmp(n_plugin, n_type) == 0)
-      snprintf(tmp_type, sizeof(tmp_type), "type_instance=%s", n_type_instance);
+    if (!(flags & GRAPHITE_DROP_DUPE_FIELDS) || strcmp(n_plugin_instance, n_type_instance) != 0)
+      snprintf(tmp_type_instance, sizeof(tmp_type_instance), ";type_instance=%s", n_type_instance);
     else
-      snprintf(tmp_type, sizeof(tmp_type),
-               "type=%s;type_instance=%s",
-               n_type, n_type_instance);
+      tmp_type_instance[0] = '\0';
   } else
-    snprintf(tmp_type, sizeof(tmp_type), "type=%s", n_type);
+    tmp_type_instance[0] = '\0';
 
   /* Assert always_append_ds -> ds_name */
   assert(!(flags & GRAPHITE_ALWAYS_APPEND_DS) || (ds_name != NULL));
   if (ds_name != NULL) {
+    snprintf(tmp_ds_name, sizeof(tmp_ds_name), ";ds_name=%s", ds_name);
+
     if ((flags & GRAPHITE_DROP_DUPE_FIELDS) && strcmp(n_plugin, n_type) == 0)
       snprintf(tmp_metric, sizeof(tmp_metric), "%s.%s", n_plugin, ds_name);
     else
       snprintf(tmp_metric, sizeof(tmp_metric), "%s.%s.%s", n_plugin, n_type, ds_name);
-
-    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) &&
-        strcmp(n_plugin, n_type) == 0 &&
-        strcmp(n_plugin_instance, n_type_instance) == 0)
-      snprintf(ret, ret_len, "%s%s%s;host=%s;%s;ds_name=%s", prefix, tmp_metric, postfix,
-               n_host, tmp_plugin, ds_name);
-    else
-      snprintf(ret, ret_len, "%s%s%s;host=%s;%s;%s;ds_name=%s", prefix, tmp_metric, postfix,
-               n_host, tmp_plugin, tmp_type, ds_name);
   } else {
+    tmp_ds_name[0] = '\0';
+
     if ((flags & GRAPHITE_DROP_DUPE_FIELDS) && strcmp(n_plugin, n_type) == 0)
       snprintf(tmp_metric, sizeof(tmp_metric), "%s", n_plugin);
     else
       snprintf(tmp_metric, sizeof(tmp_metric), "%s.%s", n_plugin, n_type);
-
-    if ((flags & GRAPHITE_DROP_DUPE_FIELDS) &&
-        strcmp(n_plugin, n_type) == 0 &&
-        strcmp(n_plugin_instance, n_type_instance) == 0)
-      snprintf(ret, ret_len, "%s%s%s;host=%s;%s", prefix, tmp_metric, postfix, n_host,
-               tmp_plugin);
-    else
-      snprintf(ret, ret_len, "%s%s%s;host=%s;%s;%s", prefix, tmp_metric, postfix, n_host,
-               tmp_plugin, tmp_type);
   }
+
+  snprintf(ret, ret_len, "%s%s%s;host=%s%s%s%s%s%s",
+           prefix, tmp_metric, postfix, n_host,
+           tmp_plugin, tmp_plugin_instance, tmp_type, tmp_type_instance, tmp_ds_name);
 
   return 0;
 }
@@ -295,9 +292,9 @@ int format_graphite(char *buffer, size_t buffer_size, data_set_t const *ds,
         sfree(rates);
         return status;
       }
-
-      escape_graphite_string(key, escape_char);
     }
+
+    escape_graphite_string(key, escape_char);
 
     /* Convert the values to an ASCII representation and put that into
      * `values'. */
