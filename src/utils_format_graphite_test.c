@@ -124,6 +124,17 @@ DEF_TEST(metric_name) {
           .suffix = NULL,
           .want_name = "foo.example@com.test.single",
       },
+      /* flag GRAPHITE_USE_TAGS */
+      {
+          .flags = GRAPHITE_USE_TAGS,
+          .want_name = "test.single;host=example.com;plugin=test;type=single"
+      },
+      {
+          .plugin_instance = "f.o.o",
+          .type_instance = "b.a.r",
+          .flags = GRAPHITE_USE_TAGS,
+          .want_name = "test.single;host=example.com;plugin=test;plugin_instance=f.o.o;type=single;type_instance=b.a.r"
+      },
   };
 
   for (size_t i = 0; i < STATIC_ARRAY_SIZE(cases); i++) {
